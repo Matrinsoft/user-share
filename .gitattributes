@@ -1,0 +1,3 @@
+# Vendored Rust crates are checked against .cargo-checksum.json by cargo, so
+# their bytes must not be rewritten by git end-of-line conversion.
+vendor/** -text
