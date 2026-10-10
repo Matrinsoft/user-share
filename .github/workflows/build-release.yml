@@ -52,27 +52,43 @@ jobs:
               # vendor handling for rust packages using bundled_rust_deps
               VENDOR_DEFINE=""
               if grep -q "bundled_rust_deps" "$SPEC"; then
-                SRC0=$(spectool -l "$SPEC" 2>/dev/null | awk "\$1==\"Source0:\" || \$1==\"Source:\" {print \$2}" | head -1 | xargs basename 2>/dev/null)
-                SRC1=$(spectool -l "$SPEC" 2>/dev/null | awk "\$2 ~ /vendor/ {print \$2}" | head -1 | xargs basename 2>/dev/null)
-                SRCDIR=$(ls -d /src/*/ 2>/dev/null | grep -v "/vendor/" | grep -v "/\\.git" | head -1 | sed "s|/src/||; s|/||")
+                SRC0=$(spectool -l "$SPEC" 2>/dev/null | awk "\$1==\"Source0:\" || \$1==\"Source:\" {print \$2}" | head -1 | xargs -r basename 2>/dev/null || true)
+                SRC1=$(spectool -l "$SPEC" 2>/dev/null | awk "\$2 ~ /vendor/ {print \$2}" | head -1 | xargs -r basename 2>/dev/null || true)
+                SRCDIR=$(ls -d /src/*/ 2>/dev/null | grep -v "/vendor/" | grep -v "/\\.git" | head -1 | sed "s|/src/||; s|/||" || true)
+                # Only ask for vendored Rust dependencies when a vendor/ tree is really part
+                # of this checkout; otherwise the spec must build against the crates that the
+                # distribution provides.
+                VENDOR_READY=0
                 if [ -n "$SRC1" ]; then
                   if [ -d /src/vendor ]; then
-                    tar cJf ~/rpmbuild/SOURCES/"$SRC1" -C /src vendor/
-                    echo "packaged vendor from /src/vendor -> $SRC1"
-                  elif [ -d "/src/$SRCDIR/vendor" ]; then
-                    tar cJf ~/rpmbuild/SOURCES/"$SRC1" -C "/src/$SRCDIR" vendor/
-                    echo "packaged vendor from /src/$SRCDIR/vendor -> $SRC1"
+                    if tar cJf ~/rpmbuild/SOURCES/"$SRC1" -C /src vendor/; then
+                      VENDOR_READY=1
+                      echo "packaged vendor from /src/vendor -> $SRC1"
+                    fi
+                  elif [ -n "$SRCDIR" ] && [ -d "/src/$SRCDIR/vendor" ]; then
+                    if tar cJf ~/rpmbuild/SOURCES/"$SRC1" -C "/src/$SRCDIR" vendor/; then
+                      VENDOR_READY=1
+                      echo "packaged vendor from /src/$SRCDIR/vendor -> $SRC1"
+                    fi
+                  else
+                    echo "warning: $SRC1 declared but no vendor/ tree found; building without vendored crates"
                   fi
-                elif [ -n "$SRC0" ] && [ -d "/src/$SRCDIR/vendor" ]; then
-                  tar cJf ~/rpmbuild/SOURCES/"$SRC0" -C /src "$SRCDIR"/
-                  echo "packaged full source tree (with vendor) -> $SRC0"
+                elif [ -n "$SRC0" ] && [ -n "$SRCDIR" ] && [ -d "/src/$SRCDIR/vendor" ]; then
+                  if tar cJf ~/rpmbuild/SOURCES/"$SRC0" -C /src "$SRCDIR"/; then
+                    VENDOR_READY=1
+                    echo "packaged full source tree (with vendor) -> $SRC0"
+                  fi
                 fi
-                if grep -q "%bcond bundled_rust_deps" "$SPEC"; then
-                  VENDOR_DEFINE="_with_bundled_rust_deps 1"
+                if [ "$VENDOR_READY" = "1" ]; then
+                  if grep -q "%bcond bundled_rust_deps" "$SPEC"; then
+                    VENDOR_DEFINE="_with_bundled_rust_deps 1"
+                  else
+                    VENDOR_DEFINE="bundled_rust_deps 1"
+                  fi
+                  echo "vendor define: $VENDOR_DEFINE"
                 else
-                  VENDOR_DEFINE="bundled_rust_deps 1"
+                  echo "no vendor tree available; using distribution Rust crates"
                 fi
-                echo "vendor define: $VENDOR_DEFINE"
               fi
 
               EXTRA_ARGS=()
@@ -116,10 +132,14 @@ jobs:
                       [ -n "$dep_url" ] || continue
                       dep_dir="$DEPS_TMP/$SOURCE0_ROOT/$dep_path"
                       mkdir -p "$(dirname "$dep_dir")"
-                      git clone -q --no-checkout "$dep_url" "$dep_dir"
-                      git -C "$dep_dir" checkout -q "$revision"
-                      rm -rf "$dep_dir/.git"
-                      tar -rf "$ARCHIVE_TAR" -C "$DEPS_TMP" "$SOURCE0_ROOT/$dep_path"
+                      if git clone -q --no-checkout "$dep_url" "$dep_dir" 2>/dev/null \
+                         && git -C "$dep_dir" checkout -q "$revision" 2>/dev/null; then
+                        rm -rf "$dep_dir/.git"
+                        tar -rf "$ARCHIVE_TAR" -C "$DEPS_TMP" "$SOURCE0_ROOT/$dep_path"
+                      else
+                        echo "warning: skipping submodule $dep_path (clone of $dep_url failed)"
+                        rm -rf "$dep_dir"
+                      fi
                     done < <(git -C /src ls-tree -r "$ARCHIVE_TREE")
 
                     # Some projects declare submodules in .gitmodules without a gitlink.
@@ -133,9 +153,13 @@ jobs:
                         [ -d "$DEPS_TMP/$SOURCE0_ROOT/$dep_path" ] && continue
                         dep_dir="$DEPS_TMP/$SOURCE0_ROOT/$dep_path"
                         mkdir -p "$(dirname "$dep_dir")"
-                        git clone -q "$dep_url" "$dep_dir"
-                        rm -rf "$dep_dir/.git"
-                        tar -rf "$ARCHIVE_TAR" -C "$DEPS_TMP" "$SOURCE0_ROOT/$dep_path"
+                        if git clone -q "$dep_url" "$dep_dir" 2>/dev/null; then
+                          rm -rf "$dep_dir/.git"
+                          tar -rf "$ARCHIVE_TAR" -C "$DEPS_TMP" "$SOURCE0_ROOT/$dep_path"
+                        else
+                          echo "warning: could not clone $dep_path from $dep_url"
+                          rm -rf "$dep_dir"
+                        fi
                       done < <(git -C /src config -f "/src/$SOURCE0_ROOT/.gitmodules" --get-regexp '\''^submodule\..*\.path$'\'' || true)
                     fi
 
@@ -149,9 +173,21 @@ jobs:
                       [ -n "$dep_url" ] || continue
                       [ -n "$dep_revision" ] || dep_revision=HEAD
                       dep_dir="$DEPS_TMP/$SOURCE0_ROOT/subprojects/$dep_dir_name"
+                      if [ -d "$dep_dir" ] && [ -n "$(ls -A "$dep_dir" 2>/dev/null)" ]; then
+                        echo "wrap $dep_dir_name already provided by the submodule; skipping"
+                        continue
+                      fi
                       mkdir -p "$(dirname "$dep_dir")"
-                      git clone -q --no-checkout "$dep_url" "$dep_dir"
-                      git -C "$dep_dir" checkout -q "$dep_revision"
+                      if ! git clone -q --no-checkout "$dep_url" "$dep_dir" 2>/dev/null; then
+                        echo "warning: could not clone wrap dependency $dep_dir_name from $dep_url"
+                        rm -rf "$dep_dir"
+                        continue
+                      fi
+                      if ! git -C "$dep_dir" checkout -q "$dep_revision" 2>/dev/null; then
+                        echo "warning: could not check out $dep_revision for $dep_dir_name"
+                        rm -rf "$dep_dir"
+                        continue
+                      fi
                       patch_dir=$(sed -n "s/^[[:space:]]*patch_directory[[:space:]]*=[[:space:]]*//p" "$wrap" | head -1)
                       if [ -n "$patch_dir" ] && [ -d "/src/$SOURCE0_ROOT/subprojects/packagefiles/$patch_dir" ]; then
                         cp -a "/src/$SOURCE0_ROOT/subprojects/packagefiles/$patch_dir/." "$dep_dir/"

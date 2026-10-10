@@ -1,0 +1,32 @@
+[package]
+name          = "reference-counted-singleton"
+description   = "Reference-counted singleton whose protected data can be recreated as needed"
+version       = "0.1.4"                                                                       # Remember to update `html_root_url`.
+authors       = ["Koutheir Attouchi <koutheir@gmail.com>"]
+edition       = "2021"
+readme        = "README.md"
+license       = "MIT"
+documentation = "https://docs.rs/reference-counted-singleton"
+homepage      = "https://codeberg.org/koutheir/reference-counted-singleton.git"
+repository    = "https://codeberg.org/koutheir/reference-counted-singleton.git"
+
+keywords = [
+    "static",
+    "concurrency",
+    "cross-platform",
+    "data-structure",
+    "cache",
+]
+categories = [
+    "algorithms",
+    "memory-management",
+    "concurrency",
+    "data-structures",
+    "development-tools::ffi",
+]
+
+[dependencies]
+
+[dev-dependencies]
+assert_matches = { version = "1.5" }
+serial_test    = { version = "3.0" }

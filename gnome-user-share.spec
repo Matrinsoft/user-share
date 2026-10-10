@@ -8,6 +8,8 @@
 }%{?-e:.%{-e*}}%{?-s:.%{-s*}}%{!?-n:%{?dist}}
 ## END: Set by rpmautospec
 
+%bcond bundled_rust_deps %{defined rhel}
+
 Name:           gnome-user-share
 Version:        48.3
 Release:        %autorelease
@@ -25,6 +27,13 @@ License:        GPL-2.0-or-later AND MIT AND Unicode-DFS-2016 AND (Apache-2.0 OR
 
 URL:            https://gitlab.gnome.org/GNOME/gnome-user-share
 Source0:        http://download.gnome.org/sources/%{name}/%{gnome_major_version}/%{name}-%{gnome_tarball_version}.tar.xz
+# To create the vendor tarball:
+#   tar Jxvf %{name}-%{gnome_tarball_version}.tar.xz ; \
+#   pushd %{name}-%{gnome_tarball_version} ; \
+#   cargo vendor --versioned-dirs ; \
+#   tar Jcvf ../%{name}-%{gnome_tarball_version}-vendor.tar.xz vendor/ ; \
+#   popd
+Source1:        %{name}-%{gnome_tarball_version}-vendor.tar.xz
 
 %gnome_check_version
 
@@ -55,17 +64,27 @@ computers on the local network using mDNS/rendezvous, so that it shows
 up in the Network location in GNOME.
 
 %prep
+%if %{with bundled_rust_deps}
+%autosetup -p1 -n %{name}-%{gnome_tarball_version} -a1
+%cargo_prep -v vendor
+%else
 %autosetup -p1 -n %{name}-%{gnome_tarball_version}
 %cargo_prep
+%endif
 
+%if %{without bundled_rust_deps}
 %generate_buildrequires
 %cargo_generate_buildrequires -a
+%endif
 
 %build
 %meson
 %meson_build
 %{cargo_license_summary -a}
 %{cargo_license -a} > LICENSE.dependencies
+%if %{with bundled_rust_deps}
+%cargo_vendor_manifest
+%endif
 
 %install
 %meson_install
@@ -87,6 +106,9 @@ desktop-file-validate $RPM_BUILD_ROOT%{_datadir}/applications/gnome-user-share-w
 %files -f gnome-user-share.lang
 %license COPYING
 %license LICENSE.dependencies
+%if %{with bundled_rust_deps}
+%license cargo-vendor.txt
+%endif
 %doc README.md NEWS
 %{_libexecdir}/gnome-user-share-webdav
 %{_datadir}/GConf/gsettings/gnome-user-share.convert
