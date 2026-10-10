@@ -49,7 +49,7 @@ BuildRequires:  mod_dnssd
 BuildRequires:  systemd-devel
 BuildRequires:  pkgconfig(libselinux)
 # The Rust code links against GLib/GIO through pkg-config. With vendored
-# crates %cargo_generate_buildrequires is skipped, so those system
+# crates the generated build requirements are skipped, so those system
 # dependencies have to be requested explicitly.
 %if %{with bundled_rust_deps}
 BuildRequires:  pkgconfig(glib-2.0)
